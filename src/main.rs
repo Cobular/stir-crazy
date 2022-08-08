@@ -53,12 +53,39 @@ where
 {
     PollRes {
         pot_val: adc.read(adc_pin).unwrap(),
-        button_val: button_pin.is_high().unwrap(),
+        button_val: button_pin.is_low().unwrap(),
     }
 }
 
-fn ms_to_duty(freq: u8, ms: f32) -> u16 {
-    (((ms / 1000f32) / (1f32 / freq as f32)) * (u16::MAX as f32)) as u16
+const TOTAL_DELAY: u32 = 50_000;
+
+const STOP_US_ON: u32 = 1500;
+const MAX_REV_US_ON: u32 = 1000;
+
+const MAX_VS_MIN: u32 = 5;
+
+const MAX_POT_VAL: u16 = 4000;
+const MAX_POT_VAL_SMOL: u16 = 40;
+const MIN_POT_VAL: u16 = 100;
+const MIN_POT_VAL_SMOL: u16 = 1;
+
+fn make_delays(fwd: bool, pot_val: u16) -> (u32, u32) {
+    let percent: u32 = match pot_val {
+        _ if pot_val < MIN_POT_VAL => 0,
+        _ if pot_val > MAX_POT_VAL => 100,
+        _ => ((pot_val - MIN_POT_VAL) / (MAX_POT_VAL_SMOL - MIN_POT_VAL_SMOL)) as u32,
+    };
+
+    let short_delay = if fwd {
+        ((percent * MAX_VS_MIN) + STOP_US_ON) as u32
+    } else {
+        (STOP_US_ON - (percent * MAX_VS_MIN)) as u32
+    };
+
+    info!("short_delay: {=u32}", short_delay);
+
+    let long_delay = TOTAL_DELAY - short_delay;
+    (short_delay, long_delay)
 }
 
 #[entry]
@@ -95,37 +122,22 @@ fn main() -> ! {
     let mut adc = Adc::new(pac.ADC, &mut pac.RESETS);
 
     let mut led_pin = pins.led.into_push_pull_output();
+    let mut servo_pin = pins.gpio0.into_push_pull_output();
     let mut button_pin = pins.gpio22.into_pull_down_input();
     let mut pot_pin = pins.gpio26.into_floating_input();
-    let mut servo_pin: Pin<_, FunctionPwm> = pins.gpio1.into_mode();
 
-    let pwm_slices = Slices::new(pac.PWM, &mut pac.RESETS);
-    let mut pwm = pwm_slices.pwm0;
-    pwm.set_ph_correct();
-    pwm.enable();
-
-    let mut pwm = pwm.into_mode::<InputHighRunning>();
-    pwm.set_ph_correct();
-    pwm.set_div_int(20u8); // 50 hz
-    pwm.enable();
-
-    // Use A channel (which outputs to GPIO 24)
-    let mut channel_a = pwm.channel_b;
-    let _channel_pin_a = channel_a.output_to(servo_pin);
-
-    let fwd = ms_to_duty(50, 2.0);
-    info!("{=u16}", fwd);
-    channel_a.set_duty(fwd);
+    let mut delays = (1500, TOTAL_DELAY - 1500);
 
     loop {
         let poll_res = poll(&mut adc, &mut pot_pin, &mut button_pin);
-        // let button_val
+        delays = make_delays(poll_res.button_val, poll_res.pot_val);
         info!("{=u16}, {=bool}", poll_res.pot_val, poll_res.button_val);
         led_pin.set_high().unwrap();
-        delay.delay_ms(50);
-        // info!("off!");
+        servo_pin.set_high().unwrap();
+        delay.delay_us(delays.0);
         led_pin.set_low().unwrap();
-        delay.delay_ms(50);
+        servo_pin.set_low().unwrap();
+        delay.delay_us(delays.1);
     }
 }
 
