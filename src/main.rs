@@ -4,10 +4,26 @@
 #![no_std]
 #![no_main]
 
-use bsp::entry;
+use bsp::{
+    entry,
+    hal::{
+        gpio::{AnyPin, Floating, FunctionPwm, Input, InputConfig},
+        pwm::{InputHighRunning, Slices, ValidPwmOutputPin},
+    },
+    hal::{
+        gpio::{Pin, SomePinId},
+        Adc,
+    },
+};
+use core::fmt::Debug;
 use defmt::*;
 use defmt_rtt as _;
-use embedded_hal::digital::v2::OutputPin;
+use embedded_hal::{
+    adc::{Channel, OneShot},
+    digital::v2::InputPin,
+    digital::v2::OutputPin,
+    PwmPin,
+};
 use embedded_time::fixed_point::FixedPoint;
 use panic_probe as _;
 
@@ -22,6 +38,28 @@ use bsp::hal::{
     sio::Sio,
     watchdog::Watchdog,
 };
+
+struct PollRes {
+    pot_val: u16,
+    button_val: bool,
+}
+
+fn poll<A, BC, B>(adc: &mut Adc, adc_pin: &mut A, button_pin: &mut B) -> PollRes
+where
+    A: AnyPin<Mode = Input<Floating>> + Channel<Adc, ID = u8>,
+    BC: InputConfig,
+    B: AnyPin<Mode = Input<BC>> + InputPin,
+    <B as embedded_hal::digital::v2::InputPin>::Error: Debug,
+{
+    PollRes {
+        pot_val: adc.read(adc_pin).unwrap(),
+        button_val: button_pin.is_high().unwrap(),
+    }
+}
+
+fn ms_to_duty(freq: u8, ms: f32) -> u16 {
+    (((ms / 1000f32) / (1f32 / freq as f32)) * (u16::MAX as f32)) as u16
+}
 
 #[entry]
 fn main() -> ! {
@@ -54,15 +92,40 @@ fn main() -> ! {
         &mut pac.RESETS,
     );
 
+    let mut adc = Adc::new(pac.ADC, &mut pac.RESETS);
+
     let mut led_pin = pins.led.into_push_pull_output();
+    let mut button_pin = pins.gpio22.into_pull_down_input();
+    let mut pot_pin = pins.gpio26.into_floating_input();
+    let mut servo_pin: Pin<_, FunctionPwm> = pins.gpio1.into_mode();
+
+    let pwm_slices = Slices::new(pac.PWM, &mut pac.RESETS);
+    let mut pwm = pwm_slices.pwm0;
+    pwm.set_ph_correct();
+    pwm.enable();
+
+    let mut pwm = pwm.into_mode::<InputHighRunning>();
+    pwm.set_ph_correct();
+    pwm.set_div_int(20u8); // 50 hz
+    pwm.enable();
+
+    // Use A channel (which outputs to GPIO 24)
+    let mut channel_a = pwm.channel_b;
+    let _channel_pin_a = channel_a.output_to(servo_pin);
+
+    let fwd = ms_to_duty(50, 2.0);
+    info!("{=u16}", fwd);
+    channel_a.set_duty(fwd);
 
     loop {
-        info!("on!");
+        let poll_res = poll(&mut adc, &mut pot_pin, &mut button_pin);
+        // let button_val
+        info!("{=u16}, {=bool}", poll_res.pot_val, poll_res.button_val);
         led_pin.set_high().unwrap();
-        delay.delay_ms(500);
-        info!("off!");
+        delay.delay_ms(50);
+        // info!("off!");
         led_pin.set_low().unwrap();
-        delay.delay_ms(500);
+        delay.delay_ms(50);
     }
 }
 
