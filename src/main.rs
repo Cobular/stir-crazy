@@ -24,6 +24,8 @@ use embedded_hal::PwmPin;
 use embedded_time::duration::Extensions;
 
 use embedded_time::fixed_point::FixedPoint;
+use rp_pico::hal::gpio::{FunctionPwm, Pin};
+use rp_pico::hal::pwm::ValidPwmOutputPin;
 // A shorter alias for the Peripheral Access Crate, which provides low-level
 // register access
 use rp_pico::hal::{pac, Clock};
@@ -36,6 +38,8 @@ use utils::calc_div;
 use core::fmt::Debug;
 use defmt::*;
 use defmt_rtt as _;
+
+use crate::utils::enable_pwm_for_pin;
 
 /// Entry point to our bare-metal application.
 ///
@@ -86,17 +90,9 @@ fn main() -> ! {
     // Init PWMs
     let mut pwm_slices = hal::pwm::Slices::new(pac.PWM, &mut pac.RESETS);
 
-    let pwm_data = calc_div(sys_clk, 50);
+    let mut led_pin = pins.led.into_mode::<FunctionPwm>();
 
-    info!("whole num: {=u16}", pwm_data.wrap);
-
-    // Configure PWM0
-    let pwm = &mut pwm_slices.pwm4;
-    pwm.set_ph_correct();
-    pwm.set_top(pwm_data.wrap);
-    pwm.set_div_int(pwm_data.div_int);
-    pwm.set_div_frac(pwm_data.div_frac);
-    pwm.enable();
+    enable_pwm_for_pin(&mut pwm_slices.pwm4, &mut led_pin, 50, sys_clk);
 
     // Output channel B on PWM0 to the GPIO1 pin
     let channel = &mut pwm.channel_b;
